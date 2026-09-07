@@ -12,7 +12,10 @@ from .rules import classify
 DEFAULT_WINDOW_DAYS = 365
 # Categories to always render a full-window per-merchant breakdown table for,
 # in addition to the top-15 Needs/Wants lists (see claude.md Output Format).
-BREAKDOWN_CATEGORIES = ("Utilities/Bills",)
+BREAKDOWN_CATEGORIES = (
+    "Utilities/Bills", "Entertainment", "Home Improvement", "Shopping",
+    "Food/Drink", "Groceries",
+)
 
 
 def _months_between(start, end):

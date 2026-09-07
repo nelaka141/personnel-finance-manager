@@ -106,12 +106,13 @@ Provide a clean summary showing:
   window, values = $ total per month) rendered as an HTML table.
 - A "Trending Up" and "Trending Down" table (columns: Category, Latest Month $,
   % change vs. prior month, % change vs. trailing 3-month average).
-- A per-category item breakdown table for `Utilities/Bills` (columns: Merchant/
-  Description, Total over the window, # of transactions), aggregating every line
-  item in that category across the full rolling-year window by merchant — not
-  just the top 15. Useful for spotting a specific recurring bill's real annual
-  cost even when no single instance of it is large enough to land in the top-15
-  Needs table.
+- A per-category item breakdown table, one per category, for `Utilities/Bills`,
+  `Entertainment`, `Home Improvement`, `Shopping`, `Food/Drink`, and `Groceries`
+  (columns: Merchant/Description, Total over the window, # of transactions),
+  aggregating every line item in that category across the full rolling-year
+  window by merchant — not just the top 15. Useful for spotting a specific
+  recurring cost's real annual total even when no single instance of it is
+  large enough to land in the top-15 Needs/Wants table.
 - Balance remaining in checking/savings accounts, with change vs. one year ago.
 
 ## Email Delivery (after the analysis)
