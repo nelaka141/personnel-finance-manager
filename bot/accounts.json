@@ -1,0 +1,20 @@
+{
+  "10eD5wd77YiXRZwJXvLJIwpPdxgvPKInY1MqL": {"name": "Robinhood Credit Card", "institution": "Robinhood", "type": "Credit", "last4": "3344"},
+  "15814927": {"name": "BNY 401(k) Savings Plan", "institution": "Voya Financial", "type": "Retirement", "last4": "-"},
+  "43813345": {"name": "Sam's Club Mastercard", "institution": "Sam's Club Credit Card", "type": "Credit", "last4": "6636"},
+  "43813524": {"name": "Venture", "institution": "Capital One", "type": "Credit", "last4": "1591"},
+  "43813525": {"name": "Kohl's Credit Card", "institution": "Capital One", "type": "Credit", "last4": "2516"},
+  "7JbywqPRRYSAXwY5ALxrTo0X0XwNX5cZBEQEmk": {"name": "Robinhood individual", "institution": "Robinhood", "type": "Investing", "last4": "2383"},
+  "7zeLwZvR9qi0ZdvdjwNaioad8vv1ODT88RMBe": {"name": "Costco Anywhere Visa", "institution": "Citibank", "type": "Credit", "last4": "7136"},
+  "9BAda9QAPXtOrVNBryjDcMN5VoX1yBCkPYePK": {"name": "Adv Plus Banking", "institution": "Bank of America", "type": "Banking (checking)", "last4": "1707"},
+  "9ZmkL3BJJYTropMdr1eacMe0e0XJ0wuJp4d4bo": {"name": "Robinhood joint", "institution": "Robinhood", "type": "Investing", "last4": "3871"},
+  "E94YvrJErOhxdEbpQAJmCkXommajZrUqq3eXnR": {"name": "TOTAL CHECKING", "institution": "Chase", "type": "Banking (checking)", "last4": "8598"},
+  "Lo7EOEdvXKckXawnEjQ6saRX0aAe1zSZ8MXQk": {"name": "United Access Checking", "institution": "United Teletech Financial FCU", "type": "Banking (checking)", "last4": "0065"},
+  "MqbD6mA1mNTwA6Dq9Jboc1zBDD84jAiggx7zpY": {"name": "Prime Visa", "institution": "Chase", "type": "Credit", "last4": "4581"},
+  "O34MDg0qgdcaPMZd4nq1uy9w55EL0YUPPrzmgy": {"name": "Ultimate Rewards", "institution": "Chase", "type": "Credit", "last4": "1337"},
+  "QK7MP9Q396HmMPy63bkNc0aNrro3DMtooX5a4x": {"name": "Ultimate Rewards", "institution": "Chase", "type": "Credit", "last4": "1172"},
+  "RkKMqV4yVLsyPeZLjqJkTnjr99xgb5trrNpjqm": {"name": "CHASE SAVINGS", "institution": "Chase", "type": "Banking (savings)", "last4": "9205"},
+  "V49L1oNMMZi7w4oe7b15ugwBwBvEBDCJ7YrYN8": {"name": "Robinhood individual", "institution": "Robinhood", "type": "Investing", "last4": "2718"},
+  "VNQ0qARQrpC87mrO76EYhgMxpOvzZNsXze1z6": {"name": "Travel Rewards Visa Signature", "institution": "Bank of America", "type": "Credit", "last4": "7298"},
+  "g6L4DdbkyZsYodNd6RaDc634vYY8PwH66Owxo": {"name": "Checking", "institution": "Citibank", "type": "Banking (checking)", "last4": "5665"}
+}
