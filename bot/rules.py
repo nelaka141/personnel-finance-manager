@@ -3,7 +3,11 @@
 Keep this in sync with claude.md by hand: whenever the rules section of
 claude.md changes, this file should change with it in the same commit.
 """
+import json
+import os
 from datetime import datetime, timedelta
+
+CATEGORY_OVERRIDES_PATH = os.path.join(os.path.dirname(__file__), "category_overrides.json")
 
 NEEDS_CATEGORIES = {
     "Rent/Mortgage", "Utilities/Bills", "Groceries", "Insurance/Financial",
@@ -61,6 +65,42 @@ def other_expenses_bucket(description):
     return "Wants"
 
 
+def load_category_overrides():
+    """User-maintained merchant -> category corrections (see
+    category_overrides.json), for cases where Truthifi's own category tag
+    is wrong or inconsistent across months (e.g. a school meals payment
+    tagged Education in some months and Charitable Giving in others).
+    Each entry: {"pattern": <case-insensitive substring of Description>,
+    "category": <category to force it to>}.
+    """
+    if not os.path.exists(CATEGORY_OVERRIDES_PATH):
+        return []
+    with open(CATEGORY_OVERRIDES_PATH) as f:
+        return json.load(f)
+
+
+def apply_category_overrides(rows, overrides=None):
+    """Returns a new list of rows with Category replaced wherever the
+    Description matches an override pattern. Applied at analysis (read)
+    time rather than at sync (write) time, so it retroactively corrects
+    everything already archived in Drive without needing to rewrite those
+    CSVs, and a future override edit applies immediately on the next run."""
+    overrides = load_category_overrides() if overrides is None else overrides
+    if not overrides:
+        return rows
+    out = []
+    for row in rows:
+        desc_upper = (row.get("Description") or "").upper()
+        match = next(
+            (o for o in overrides if o["pattern"].upper() in desc_upper), None
+        )
+        if match:
+            row = dict(row)
+            row["Category"] = match["category"]
+        out.append(row)
+    return out
+
+
 def classify(rows):
     """Apply de-duplication + 50/30/20 categorization to a list of CSV row
     dicts (see csv_io.HEADER). Returns a dict:
@@ -74,6 +114,8 @@ def classify(rows):
     normal charge, negative for a refund/credit against that category (so
     totals net out correctly).
     """
+    rows = apply_category_overrides(rows)
+
     cc_received = [
         r for r in rows if r.get("Category") == "CreditCardPaymentReceived"
     ]

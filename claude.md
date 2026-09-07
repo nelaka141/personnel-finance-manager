@@ -43,6 +43,16 @@ rate limit at all.
      explicitly — the next day's run will naturally catch up on the missed days.
      Never estimate or fabricate figures for a day that failed to sync.
 
+## Category Overrides
+Truthifi's own category tag is sometimes wrong or inconsistent for a given
+merchant across months (e.g. a school meals payment tagged Education in one
+month and Charitable Giving in another). Maintain a merchant → category
+correction list in `bot/category_overrides.json` (pattern = case-insensitive
+substring of the transaction description, category = what it should be
+tagged as instead). Apply it at analysis time, not sync time, so a new
+override immediately corrects everything already archived in Drive without
+rewriting those CSVs.
+
 ## Phase 2 — Analysis (reads Drive CSVs only, never calls Truthifi)
 
 ### Reporting Period
@@ -96,6 +106,12 @@ Provide a clean summary showing:
   window, values = $ total per month) rendered as an HTML table.
 - A "Trending Up" and "Trending Down" table (columns: Category, Latest Month $,
   % change vs. prior month, % change vs. trailing 3-month average).
+- A per-category item breakdown table for `Utilities/Bills` (columns: Merchant/
+  Description, Total over the window, # of transactions), aggregating every line
+  item in that category across the full rolling-year window by merchant — not
+  just the top 15. Useful for spotting a specific recurring bill's real annual
+  cost even when no single instance of it is large enough to land in the top-15
+  Needs table.
 - Balance remaining in checking/savings accounts, with change vs. one year ago.
 
 ## Email Delivery (after the analysis)
