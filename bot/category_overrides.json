@@ -1,0 +1,4 @@
+[
+  {"pattern": "EDISON BOE MEALS PURCHASE", "category": "Food/Drink", "note": "School meals account payment, mislabeled by Truthifi as Education/Charitable Giving depending on the month"},
+  {"pattern": "MITHAAS", "category": "Food/Drink", "note": "Mithaas restaurant/sweets shop, mislabeled by Truthifi as Charitable Giving"}
+]

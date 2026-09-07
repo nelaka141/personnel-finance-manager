@@ -10,6 +10,9 @@ from .drive_client import DriveClient
 from .rules import classify
 
 DEFAULT_WINDOW_DAYS = 365
+# Categories to always render a full-window per-merchant breakdown table for,
+# in addition to the top-15 Needs/Wants lists (see claude.md Output Format).
+BREAKDOWN_CATEGORIES = ("Utilities/Bills",)
 
 
 def _months_between(start, end):
@@ -25,8 +28,17 @@ def _months_between(start, end):
 
 
 def load_window_rows(as_of=None, window_days=DEFAULT_WINDOW_DAYS, drive=None):
-    """Downloads every monthly CSV that overlaps [as_of - window_days, as_of]
-    and returns (rows, months, missing_months)."""
+    """Downloads every monthly CSV touched by the window and returns
+    (rows, months, missing_months).
+
+    The window is month-granular, not day-granular: every calendar month
+    that the [as_of - window_days, as_of] range overlaps at all is included
+    in full (matching claude.md's "the (up to 13) calendar months touched by
+    the rolling-year window" and "download them ... and concatenate" -- the
+    matrix and trend tables are meant to show whole-month totals). The only
+    day-level clip is the upper bound, so a still-in-progress current month
+    doesn't pull in future-dated rows.
+    """
     drive = drive or DriveClient()
     as_of = as_of or date.today()
     start = as_of - timedelta(days=window_days)
@@ -39,13 +51,64 @@ def load_window_rows(as_of=None, window_days=DEFAULT_WINDOW_DAYS, drive=None):
             missing.append(month)
             continue
         for r in csv_text_to_rows(text):
-            if start.isoformat() <= r.get("Date", "") <= as_of.isoformat():
+            if r.get("Date", "") <= as_of.isoformat():
                 rows.append(r)
     return rows, months, missing
 
 
 def top_n(bucket_rows, n=15):
     return sorted(bucket_rows, key=lambda r: -r["_signed_amount"])[:n]
+
+
+_MERCHANT_STOP_WORDS = {"PPD", "WEB", "ID:", "ID"}
+
+
+def normalize_merchant(description):
+    """Strips per-transaction reference numbers/IDs off a raw transaction
+    description to get a stable merchant key -- e.g. "MIDDLESEXWATER
+    UTILITYPMT 9993047 WEB ID: 0000007041" and "MIDDLESEXWATER UTILITYPMT
+    2810973 WEB ID: 0000007041" (different reference numbers, same biller,
+    different months) both normalize to "MIDDLESEXWATER UTILITYPMT" so they
+    aggregate as one item instead of fragmenting into one row per month.
+    Also drops an immediately-repeated word (e.g. "Sunrun Sunrun ...") that
+    shows up in some of Truthifi's own description formats for one biller."""
+    out = []
+    for tok in description.split():
+        bare = tok.rstrip(":")
+        if bare.upper() in _MERCHANT_STOP_WORDS:
+            break
+        if len(tok) >= 4 and any(c.isdigit() for c in tok):
+            break
+        if out and out[-1].upper() == tok.upper():
+            continue
+        out.append(tok)
+    return " ".join(out) if out else description
+
+
+def category_item_breakdown(all_bucket_rows, category):
+    """Aggregates every line item in `category` across the whole window by
+    normalized merchant (not just the top 15), for a full-window per-item
+    total. Returns a list of {description, total, count} sorted by total
+    descending. Grouping is case-insensitive on the normalized merchant key
+    (Truthifi doesn't always capitalize a given biller's name the same way
+    across transaction types), while the displayed description keeps the
+    first-seen casing."""
+    totals = defaultdict(lambda: {"display": None, "total": 0.0, "count": 0})
+    for r in all_bucket_rows:
+        if r["Category"] != category:
+            continue
+        merchant = normalize_merchant(r["Description"])
+        key = merchant.upper()
+        entry = totals[key]
+        if entry["display"] is None:
+            entry["display"] = merchant
+        entry["total"] += r["_signed_amount"]
+        entry["count"] += 1
+    rows = [
+        {"description": v["display"], "total": v["total"], "count": v["count"]}
+        for v in totals.values()
+    ]
+    return sorted(rows, key=lambda r: -r["total"])
 
 
 def month_category_matrix(rows):
@@ -133,6 +196,10 @@ def run_analysis(as_of=None, window_days=DEFAULT_WINDOW_DAYS, drive=None):
         "top_wants": top_n(wants),
         "matrix": {cat: dict(by_month) for cat, by_month in matrix.items()},
         "trends": trends,
+        "category_breakdowns": {
+            cat: category_item_breakdown(needs + wants, cat)
+            for cat in BREAKDOWN_CATEGORIES
+        },
         "excluded_count": len(result["excluded"]),
     }
 
@@ -196,6 +263,13 @@ def render_html(report):
                       + "".join(f"<td>{_fmt_money(by_month.get(m, 0.0))}</td>" for m in months)
                       + "</tr>")
     parts.append("</table>")
+
+    for category, items in report["category_breakdowns"].items():
+        parts.append(f"<h3>{html.escape(category)} — full-window breakdown by item</h3>")
+        parts.append(_table(
+            items, ["description", "total", "count"],
+            ["Merchant/Description", "Total", "# Transactions"],
+        ))
 
     for label, key in (("Trending Up", "up"), ("Trending Down", "down")):
         parts.append(f"<h3>{label}</h3>")
