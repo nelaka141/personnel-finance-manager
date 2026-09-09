@@ -31,6 +31,16 @@ def dedup_key(row):
             row.get("Transaction Type"), str(row.get("Amount")))
 
 
+def _security_symbol(security):
+    """Truthifi's get_transactions has returned `security` as either a bare
+    ticker string or a nested object ({securityId, securityType, handle:
+    {symbol, ...}}) depending on API version. Normalize to a plain string
+    so it serializes cleanly as one CSV cell either way."""
+    if isinstance(security, dict):
+        return (security.get("handle") or {}).get("symbol", "") or ""
+    return security or ""
+
+
 def truthifi_record_to_row(rec, accounts):
     """Convert one raw Truthifi get_transactions record (as returned by the
     MCP tool, with keys like accountId/date/description/...) into a CSV row
@@ -50,5 +60,5 @@ def truthifi_record_to_row(rec, accounts):
         "Quantity": rec.get("quantity", ""),
         "Price": rec.get("price", ""),
         "Fees": rec.get("fees", ""),
-        "Security": rec.get("security", ""),
+        "Security": _security_symbol(rec.get("security")),
     }
