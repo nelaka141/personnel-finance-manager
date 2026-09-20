@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 from .csv_io import csv_text_to_rows
 from .drive_client import DriveAccessError, DriveClient
 from .rules import classify
+from .sync import load_accounts
 
 DEFAULT_WINDOW_DAYS = 365
 # Categories to always render a full-window per-merchant breakdown table for,
@@ -179,7 +180,93 @@ def trend_report(matrix, months, top_k=5):
     return {"up": up, "down": down}
 
 
-def run_analysis(as_of=None, window_days=DEFAULT_WINDOW_DAYS, drive=None):
+def net_cash_flow(rows):
+    """Income minus everything tracked as going out, over `rows`.
+
+    This is the report's "where did the year land" figure. It is deliberately
+    not an account balance: a balance cannot be derived from a transaction
+    ledger, and fetching one would cost extra Truthifi calls that the Phase 1
+    call budget in claude.md does not allow.
+    """
+    result = classify(rows)
+    outflow = (
+        sum(r["_signed_amount"] for r in result["needs"])
+        + sum(r["_signed_amount"] for r in result["wants"])
+        + result["savings_total"]
+    )
+    return {
+        "income": result["income_total"],
+        "outflow": outflow,
+        "net": result["income_total"] - outflow,
+    }
+
+
+def prior_window_cash_flow(as_of, window_days, drive):
+    """Net cash flow over the window immediately before this one.
+
+    Returns None when not one month of that window is readable -- the archive
+    starts 2025-01, so a prior-year window can fall entirely before it. Partial
+    coverage is reported rather than hidden: `months_missing` is what stops the
+    caller presenting a part-year figure as a full-year one.
+    """
+    prior_as_of = as_of - timedelta(days=window_days)
+    try:
+        rows, months, missing = load_window_rows(prior_as_of, window_days, drive)
+    except DriveAccessError:
+        return None
+    flow = net_cash_flow(rows)
+    flow["months_in_window"] = sorted(set(months) - set(missing))
+    flow["months_missing"] = missing
+    flow["as_of"] = prior_as_of.isoformat()
+    return flow
+
+
+CASH_ACCOUNT_TYPE_PREFIX = "banking"
+
+
+def balance_summary(records, accounts):
+    """Build the checking/savings balance table from ONE get_balance_history
+    call plus the static accounts.json map.
+
+    `records` are that call's raw output: {accountId, initialBalance,
+    endingBalance}. Account name and type come from `accounts`, which is why
+    this needs no `get_accounts` call -- see the call budget in claude.md.
+
+    An account id that is not in the map is reported under `unknown_account_ids`
+    rather than dropped: it means a newly linked account that accounts.json has
+    not caught up with, and silently omitting it would understate the total.
+    """
+    rows, unknown = [], []
+    for rec in records:
+        account_id = rec.get("accountId")
+        acct = accounts.get(account_id)
+        if acct is None:
+            unknown.append(account_id)
+            continue
+        if not (acct.get("type") or "").lower().startswith(CASH_ACCOUNT_TYPE_PREFIX):
+            continue
+        start, end = rec.get("initialBalance"), rec.get("endingBalance")
+        rows.append({
+            "account": acct.get("name", account_id),
+            "type": acct.get("type", ""),
+            "start": start,
+            "end": end,
+            # None rather than 0.0 when either side is missing: a missing
+            # balance is unknown, and claude.md forbids reporting a figure
+            # for data that did not load.
+            "change": (end - start) if start is not None and end is not None else None,
+        })
+    rows.sort(key=lambda r: r["account"])
+    return {
+        "accounts": rows,
+        "total_start": sum(r["start"] for r in rows if r["start"] is not None),
+        "total_end": sum(r["end"] for r in rows if r["end"] is not None),
+        "unknown_account_ids": unknown,
+    }
+
+
+def run_analysis(as_of=None, window_days=DEFAULT_WINDOW_DAYS, drive=None,
+                 balances=None):
     drive = drive or DriveClient()
     rows, months, missing_months = load_window_rows(as_of, window_days, drive)
     result = classify(rows)
@@ -218,6 +305,15 @@ def run_analysis(as_of=None, window_days=DEFAULT_WINDOW_DAYS, drive=None):
             for cat in BREAKDOWN_CATEGORIES
         },
         "excluded_count": len(result["excluded"]),
+        "cash_flow": {
+            "income": result["income_total"],
+            "outflow": needs_total + wants_total + savings_total,
+            "net": result["income_total"] - (needs_total + wants_total + savings_total),
+        },
+        "prior_cash_flow": prior_window_cash_flow(
+            as_of or date.today(), window_days, drive
+        ),
+        "balances": balance_summary(balances, load_accounts()) if balances else None,
     }
 
 
@@ -266,6 +362,59 @@ def render_html(report):
         f"<li>Total tracked outflow: {_fmt_money(t['total_tracked_outflow'])}</li>",
         "</ul>",
     ]
+
+    cf = report.get("cash_flow")
+    if cf:
+        parts.append("<h3>Net cash flow</h3><ul>")
+        parts.append(f"<li>This window: {_fmt_money(cf['net'])} "
+                     f"({_fmt_money(cf['income'])} in, {_fmt_money(cf['outflow'])} out)</li>")
+        prior = report.get("prior_cash_flow")
+        if prior:
+            parts.append(f"<li>Prior window: {_fmt_money(prior['net'])} "
+                         f"({_fmt_money(prior['income'])} in, "
+                         f"{_fmt_money(prior['outflow'])} out)</li>")
+            parts.append(f"<li>Change: {_fmt_money(cf['net'] - prior['net'])}</li>")
+            if prior.get("months_missing"):
+                # Say it plainly: the archive starts 2025-01, so a prior-year
+                # window can be only part-covered, and a part-year figure must
+                # never be presented as a full-year one.
+                parts.append(
+                    "<li><b>The prior window is only partly covered</b> — no data in "
+                    "Drive for " + ", ".join(prior["months_missing"])
+                    + ". Its figures cover "
+                    + str(len(prior.get("months_in_window", [])))
+                    + " of the window's months, so the comparison understates the "
+                      "prior period rather than measuring it.</li>"
+                )
+        else:
+            parts.append("<li>Prior window: no readable data in Drive for that "
+                         "period, so no comparison is shown.</li>")
+        parts.append("</ul>")
+
+    bal = report.get("balances")
+    if bal and bal["accounts"]:
+        parts.append("<h3>Checking &amp; savings balances</h3>")
+        parts.append(_table(
+            bal["accounts"] + [{
+                "account": "Total", "type": "",
+                "start": bal["total_start"], "end": bal["total_end"],
+                "change": bal["total_end"] - bal["total_start"],
+            }],
+            ["account", "type", "start", "end", "change"],
+            ["Account", "Type", "Balance a year ago", "Balance now", "Change"],
+        ))
+        if bal["unknown_account_ids"]:
+            parts.append(
+                "<p><b>Note:</b> " + str(len(bal["unknown_account_ids"]))
+                + " account(s) came back from Truthifi that are not in "
+                  "<code>bot/accounts.json</code>, so they are left out of the "
+                  "table and the total. Add them to that file to include them: "
+                + ", ".join(html.escape(str(a)) for a in bal["unknown_account_ids"])
+                + ".</p>"
+            )
+    elif bal is not None:
+        parts.append("<h3>Checking &amp; savings balances</h3>"
+                     "<p>No cash accounts came back from the balance lookup.</p>")
     if report["missing_months"]:
         parts.append(
             "<p><b>Note:</b> no transaction data was readable in Drive for: "
