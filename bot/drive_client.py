@@ -21,7 +21,7 @@ def _build_credentials():
         raise RuntimeError("GOOGLE_DRIVE_TOKEN_JSON env var is not set")
     v = json.loads(raw)
     return Credentials(
-        token=v["token"],
+        token=v.get("token"),
         refresh_token=v.get("refresh_token"),
         token_uri=v.get("token_uri"),
         client_id=v.get("client_id"),
