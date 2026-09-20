@@ -45,10 +45,21 @@ can only reach files it created itself or that were explicitly opened with it.
   files do share a name, the most recently modified one wins and the
   duplicates are reported on stderr.
 
-If the historical archive turns out to be invisible under the narrowed scope,
-there are two ways forward: open the `personnel-finances` folder with this
-OAuth client so Drive grants it access, or start a fresh archive and rebuild
-forward with `bootstrap-sync-state --from-date YYYY-MM-DD`.
+If the historical archive turns out to be invisible to this OAuth client
+under the narrowed scope, **none of the options involve re-fetching anything
+from Truthifi.** The 21 months from 2025-01 onward are still readable through
+the Drive MCP connector that created them, so:
+
+- `analyze --from-dir DIR` runs the whole Phase 2 report off a local copy of
+  the CSVs and needs no Drive credential at all; or
+- `import-archive --from-dir DIR` uploads that local copy through this
+  client, which then owns the files and can read them directly from then on
+  (idempotent -- months already identical in Drive are skipped); or
+- open the `personnel-finances` folder with this OAuth client so Drive grants
+  it per-file access to what is already there.
+
+`bootstrap-sync-state --from-date YYYY-MM-DD` only sets the watermark; it
+never re-pulls history.
 
 ## Commands
 

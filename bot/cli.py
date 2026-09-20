@@ -12,6 +12,7 @@ from datetime import date, datetime
 
 from . import sync
 from .analysis import render_html, run_analysis
+from .local_archive import LocalArchive, import_into_drive
 from .drive_client import (
     BROAD_DRIVE_SCOPES,
     DRIVE_FILE_SCOPE,
@@ -31,6 +32,21 @@ def cmd_bootstrap(args):
         drive, from_date=args.from_date
     )
     print(json.dumps({"last_synced_date": last}))
+
+
+def cmd_import_archive(args):
+    """Upload monthly CSVs from a local directory into the Drive archive.
+
+    The way to hand the existing history to this app's own OAuth client
+    without re-fetching a single transaction from Truthifi: download the
+    archive with a credential that can read it, then run this.
+    """
+    local = LocalArchive(args.from_dir)
+    drive = DriveClient()
+    report = import_into_drive(local, drive, months=args.months or None)
+    report["warnings"] = drive.warnings
+    print(json.dumps(report, indent=2))
+    return 1 if report["failed"] else 0
 
 
 def cmd_doctor(args):
@@ -135,8 +151,8 @@ def cmd_sync(args):
 
 def cmd_analyze(args):
     as_of = datetime.strptime(args.as_of, "%Y-%m-%d").date() if args.as_of else date.today()
-    drive = DriveClient()
-    report = run_analysis(as_of=as_of, window_days=args.window_days, drive=drive)
+    store = LocalArchive(args.from_dir) if args.from_dir else DriveClient()
+    report = run_analysis(as_of=as_of, window_days=args.window_days, drive=store)
     if args.json_out:
         with open(args.json_out, "w") as f:
             json.dump(report, f, indent=2, default=str)
@@ -167,8 +183,14 @@ def main(argv=None):
     p.add_argument("--advance-watermark-to", help="YYYY-MM-DD to set as the new last_synced_date after a successful merge")
     p.set_defaults(func=cmd_sync)
 
+    p = sub.add_parser("import-archive", help="Upload monthly CSVs from a local directory into Drive (no Truthifi calls)")
+    p.add_argument("--from-dir", required=True, help="Directory holding transactions_YYYY-MM.csv, nested in YYYY-MM/ folders or flat")
+    p.add_argument("--months", nargs="*", help="Limit to these YYYY-MM months (default: every month found)")
+    p.set_defaults(func=cmd_import_archive)
+
     p = sub.add_parser("analyze", help="Run the rolling-window budget + trend analysis (Phase 2)")
     p.add_argument("--as-of", help="YYYY-MM-DD, defaults to today")
+    p.add_argument("--from-dir", help="Read the monthly CSVs from this local directory instead of Drive")
     p.add_argument("--window-days", type=int, default=365)
     p.add_argument("--json-out", help="Write the raw report as JSON to this path")
     p.add_argument("--html-out", help="Write the rendered HTML report to this path (default: stdout)")
