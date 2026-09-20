@@ -86,20 +86,26 @@ def set_last_synced_date(date_str, drive=None):
     drive.write_sync_state({"last_synced_date": date_str})
 
 
-def bootstrap_sync_state_from_existing_months(drive=None):
+def bootstrap_sync_state_from_existing_months(drive=None, from_date=None):
     """One-time helper: if sync_state.json doesn't exist yet, derive
     last_synced_date from the newest date already present across the
-    monthly CSVs already archived in Drive."""
+    monthly CSVs already archived in Drive.
+
+    `from_date` sets the watermark explicitly instead of deriving it. That is
+    the way back in if the historical archive is not visible to this app
+    under the drive.file scope: pick the day to resume from and let the daily
+    sync rebuild forward, rather than reading a watermark out of CSVs the app
+    cannot open.
+    """
     drive = drive or DriveClient()
     if drive.read_sync_state() is not None:
         return get_last_synced_date(drive)
 
-    root = drive.root_folder_id()
-    res = drive.service.files().list(
-        q=f"'{root}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
-        fields="files(name)",
-    ).execute()
-    months = sorted(f["name"] for f in res.get("files", []))
+    if from_date:
+        set_last_synced_date(from_date, drive)
+        return from_date
+
+    months = drive.list_month_folders()
     if not months:
         return None
     latest_month = months[-1]
