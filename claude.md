@@ -124,13 +124,24 @@ what failed and stop, rather than improvising another route.
     `{"last_synced_date": ...}` over it loses it, and a run that cannot find
     the existing `sync_state.json` by name will create a *second* one rather
     than update it (which is how the root folder ended up holding three).
+- **API call budget: exactly one Truthifi call per run.** That one call is the
+  `get_transactions` in step 2 below. Nothing else in this routine may call
+  Truthifi — not `get_accounts`, not `get_balance_history`, not a second page of
+  transactions. Everything else the report needs is derived from the CSVs
+  already archived in Drive. The monthly allowance is small (150 calls); a run
+  that spends three calls instead of one exhausts it before the month is out,
+  which is exactly what happened on 2026-09-20 and left the rest of that month
+  unable to sync at all.
 - Each run:
   1. Read `last_synced_date` from `sync_state.json`.
-  2. Call Truthifi `get_transactions` for **all** accounts with **no category or
-     type filter** (the full raw ledger — every debit and credit, including
-     investment activity, matching what's already in the historical Drive
-     archive), for the window `[last_synced_date, today]`, paginating fully via
-     cursor until `hasMore` is false.
+  2. Call Truthifi `get_transactions` **once** for **all** accounts with **no
+     category or type filter** (the full raw ledger — every debit and credit,
+     including investment activity, matching what's already in the historical
+     Drive archive), for the window `[last_synced_date, today]`, sorted by date
+     ascending. Do not pass `pageSize`: it is capped by the subscription tier,
+     and asking for more than the tier allows fails the whole call rather than
+     returning fewer rows. Do not follow the `cursor` for a second page — step 5
+     says what to do when `hasMore` comes back true.
   3. Group the newly-fetched records by calendar month (a sync window usually
      lands in one month, occasionally two if it spans a month boundary).
   4. For each affected month: download the existing `transactions_YYYY-MM.csv`
@@ -139,11 +150,26 @@ what failed and stop, rather than improvising another route.
      overwriting the file in place. Create the `YYYY-MM` subfolder first if it
      doesn't exist yet.
   5. Only after every affected month has uploaded successfully, update
-     `sync_state.json` with `last_synced_date = today`.
-  6. If Truthifi's daily rate limit is hit mid-sync, stop without advancing
-     `last_synced_date` past the last fully-synced day, and report the gap
-     explicitly — the next day's run will naturally catch up on the missed days.
-     Never estimate or fabricate figures for a day that failed to sync.
+     `sync_state.json`:
+     - If `hasMore` was false, the window is fully covered. Set
+       `last_synced_date = today` — or, when the response reports that the
+       requested range was capped short of today, to the last date it actually
+       returned data for. Never record a day the call did not really cover:
+       on 2026-09-20 the range came back capped at 2026-09-19, so 09-19 is the
+       honest watermark and 09-20 would have silently skipped a day.
+     - If `hasMore` was true, the single page covered the earliest dates only,
+       and its newest day is likely truncated part-way through. Set
+       `last_synced_date` to the day *before* the newest date in the returned
+       page, and report that the window was not fully consumed. Tomorrow's one
+       call resumes from there and catches up. This trades a day of latency for
+       staying inside the call budget, and it never silently drops a row.
+  6. If the Truthifi call fails outright — daily rate limit, monthly quota
+     exhausted, or any other error — do not retry it, and do not advance
+     `last_synced_date` at all. Report the failure and the resulting gap
+     explicitly, then **carry on with Phase 2 anyway**: it needs no Truthifi
+     access and can still produce the complete report from the Drive archive.
+     A failed sync is a stale report, not a missing one. Never estimate or
+     fabricate figures for a day that failed to sync.
 
 ## Category Overrides
 Truthifi's own category tag is sometimes wrong or inconsistent for a given
@@ -162,7 +188,7 @@ rewriting those CSVs.
   regardless of any different default period stated in the scheduling prompt —
   this file's period definition takes precedence.
 - Use the prior rolling-year window (days 366–730 back) for period-over-period
-  balance comparisons.
+  comparisons of net cash flow.
 - Determine which monthly CSVs overlap the window (normally the current month
   plus the prior 12), download them from Drive, and concatenate into one dataset
   before analyzing.
@@ -215,7 +241,18 @@ Provide a clean summary showing:
   window by merchant — not just the top 15. Useful for spotting a specific
   recurring cost's real annual total even when no single instance of it is
   large enough to land in the top-15 Needs/Wants table.
-- Balance remaining in checking/savings accounts, with change vs. one year ago.
+- Net cash flow for the rolling-year period (total income minus total tracked
+  outflow), alongside the same figure for the prior rolling year, both computed
+  from the archived CSVs. State how many months of the prior window were
+  actually readable: the archive begins 2025-01, so a prior-year comparison run
+  before 2027-01 covers only part of its window and must say so rather than
+  presenting a partial figure as a full-year one.
+- **Account balances are deliberately not reported.** A balance cannot be
+  derived from a transaction ledger, and fetching one would cost a second and
+  third Truthifi call per run (`get_accounts` + `get_balance_history`), which
+  the Phase 1 call budget does not allow. If a balance is ever wanted, it is a
+  deliberate decision to widen that budget — not something a run adds on its
+  own initiative.
 
 ## Email Delivery (after the analysis)
 After producing the summary, draft a detailed email using the Gmail MCP connector:
@@ -226,10 +263,11 @@ After producing the summary, draft a detailed email using the Gmail MCP connecto
 2. The email body must contain the full detailed report: total expenditures, the
    Needs/Wants/Savings breakdown with per-category detail and notable merchants, the
    two top-15 HTML tables, the month × category trend matrix and the trending
-   up/down table described above, end-of-period account balances with
-   period-over-period change (vs. one year ago), and any flags (over-target
-   buckets, zero savings, missing income, untracked cash withdrawals, or a Phase 1
-   sync gap from a rate-limit stop). Note anything de-duplicated or excluded.
+   up/down table described above, net cash flow for the window with its
+   prior-year comparison (not account balances — see Output Format), and any
+   flags (over-target buckets, zero savings, missing income, untracked cash
+   withdrawals, or a Phase 1 sync gap from a rate-limit or quota stop, naming
+   the last day actually synced). Note anything de-duplicated or excluded.
 3. Apply the Gmail label `Send-With-Claude` to the draft's thread (look up the label
    ID via list_labels; create the label if it does not exist).
 4. If the Gmail connector is unavailable, report that explicitly and still present

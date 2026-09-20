@@ -179,6 +179,47 @@ def trend_report(matrix, months, top_k=5):
     return {"up": up, "down": down}
 
 
+def net_cash_flow(rows):
+    """Income minus everything tracked as going out, over `rows`.
+
+    This is the report's "where did the year land" figure. It is deliberately
+    not an account balance: a balance cannot be derived from a transaction
+    ledger, and fetching one would cost extra Truthifi calls that the Phase 1
+    call budget in claude.md does not allow.
+    """
+    result = classify(rows)
+    outflow = (
+        sum(r["_signed_amount"] for r in result["needs"])
+        + sum(r["_signed_amount"] for r in result["wants"])
+        + result["savings_total"]
+    )
+    return {
+        "income": result["income_total"],
+        "outflow": outflow,
+        "net": result["income_total"] - outflow,
+    }
+
+
+def prior_window_cash_flow(as_of, window_days, drive):
+    """Net cash flow over the window immediately before this one.
+
+    Returns None when not one month of that window is readable -- the archive
+    starts 2025-01, so a prior-year window can fall entirely before it. Partial
+    coverage is reported rather than hidden: `months_missing` is what stops the
+    caller presenting a part-year figure as a full-year one.
+    """
+    prior_as_of = as_of - timedelta(days=window_days)
+    try:
+        rows, months, missing = load_window_rows(prior_as_of, window_days, drive)
+    except DriveAccessError:
+        return None
+    flow = net_cash_flow(rows)
+    flow["months_in_window"] = sorted(set(months) - set(missing))
+    flow["months_missing"] = missing
+    flow["as_of"] = prior_as_of.isoformat()
+    return flow
+
+
 def run_analysis(as_of=None, window_days=DEFAULT_WINDOW_DAYS, drive=None):
     drive = drive or DriveClient()
     rows, months, missing_months = load_window_rows(as_of, window_days, drive)
@@ -218,6 +259,14 @@ def run_analysis(as_of=None, window_days=DEFAULT_WINDOW_DAYS, drive=None):
             for cat in BREAKDOWN_CATEGORIES
         },
         "excluded_count": len(result["excluded"]),
+        "cash_flow": {
+            "income": result["income_total"],
+            "outflow": needs_total + wants_total + savings_total,
+            "net": result["income_total"] - (needs_total + wants_total + savings_total),
+        },
+        "prior_cash_flow": prior_window_cash_flow(
+            as_of or date.today(), window_days, drive
+        ),
     }
 
 
@@ -266,6 +315,37 @@ def render_html(report):
         f"<li>Total tracked outflow: {_fmt_money(t['total_tracked_outflow'])}</li>",
         "</ul>",
     ]
+
+    cf = report.get("cash_flow")
+    if cf:
+        parts.append("<h3>Net cash flow</h3><ul>")
+        parts.append(f"<li>This window: {_fmt_money(cf['net'])} "
+                     f"({_fmt_money(cf['income'])} in, {_fmt_money(cf['outflow'])} out)</li>")
+        prior = report.get("prior_cash_flow")
+        if prior:
+            parts.append(f"<li>Prior window: {_fmt_money(prior['net'])} "
+                         f"({_fmt_money(prior['income'])} in, "
+                         f"{_fmt_money(prior['outflow'])} out)</li>")
+            parts.append(f"<li>Change: {_fmt_money(cf['net'] - prior['net'])}</li>")
+            if prior.get("months_missing"):
+                # Say it plainly: the archive starts 2025-01, so a prior-year
+                # window can be only part-covered, and a part-year figure must
+                # never be presented as a full-year one.
+                parts.append(
+                    "<li><b>The prior window is only partly covered</b> — no data in "
+                    "Drive for " + ", ".join(prior["months_missing"])
+                    + ". Its figures cover "
+                    + str(len(prior.get("months_in_window", [])))
+                    + " of the window's months, so the comparison understates the "
+                      "prior period rather than measuring it.</li>"
+                )
+        else:
+            parts.append("<li>Prior window: no readable data in Drive for that "
+                         "period, so no comparison is shown.</li>")
+        parts.append("<li>Account balances are not reported: a balance cannot be "
+                     "derived from a transaction ledger, and fetching one would "
+                     "exceed this routine's one-Truthifi-call-per-run budget.</li>")
+        parts.append("</ul>")
     if report["missing_months"]:
         parts.append(
             "<p><b>Note:</b> no transaction data was readable in Drive for: "
