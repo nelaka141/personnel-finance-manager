@@ -19,6 +19,18 @@ rate limit at all.
   `GOOGLE_DRIVE_TOKEN_JSON` (keys: token, refresh_token, token_uri, client_id,
   client_secret, scopes) — not the Drive MCP connector tool. Use a venv if the
   system Python's native `cryptography`/`_cffi_backend` install is broken.
+- **Run `bot/` from the repository checkout already present in the session's
+  working directory, not from a fresh clone under `/tmp`.** This takes
+  precedence over any instruction in the scheduling prompt to clone the repo
+  somewhere else in order to run it (reading `claude.md` out of a temporary
+  clone is fine — executing the bot from there is not). Code in a just-fetched
+  temporary directory is external code to the sandbox: the unattended
+  2026-09-20 run had `pip install -r bot/requirements.txt` and
+  `python -m bot.cli doctor` both denied by the auto-mode classifier with
+  `[Code from External]` when run from `/tmp/pfm`, so no phase of the routine
+  executed. The same commands run normally from the session's own checkout.
+  If the checkout is missing, `git -C <workdir> pull` it up to date rather
+  than cloning a second copy elsewhere.
 - **The OAuth grant is `drive.file`, not full drive access.** Two consequences
   the routine has to respect:
   - The refresh request must never ask for a broader scope than was granted, or
@@ -32,6 +44,15 @@ rate limit at all.
     report. Run `python -m bot.cli doctor` to tell "hidden by the scope" apart
     from "genuinely empty"; if the archive is hidden, say so and stop rather
     than re-deriving figures, per the no-fabrication rule below.
+  - To be unambiguous about the recovery paths in `bot/README.md`
+    (`analyze --from-dir`, `import-archive --from-dir`, or re-granting the
+    folder to this OAuth client): those are **operator-invoked**, for someone
+    who has decided how to recover. An unattended run does not pick one on its
+    own initiative, does not reroute Drive I/O through the MCP connector to get
+    around a hidden archive, and never deletes or renames anything in Drive.
+    It stops and reports what `doctor` found. An explicit instruction in a
+    single run's prompt does not change this; only a change to this file
+    does.
 - Sync state file: `personnel-finances/sync_state.json`, holding
   `{"last_synced_date": "YYYY-MM-DD"}` — the last calendar date already pulled from
   Truthifi and written to Drive.
