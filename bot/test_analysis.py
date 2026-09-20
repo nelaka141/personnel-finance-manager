@@ -90,4 +90,81 @@ def test_render_says_so_when_there_is_no_prior_window():
     }
     out = analysis.render_html(report)
     assert "no comparison is shown" in out
-    assert "Account balances are not reported" in out
+
+
+# -- balance table (one get_balance_history call + the static accounts map) --
+
+ACCOUNTS = {
+    "chk1": {"name": "Chase Checking", "type": "Banking (checking)"},
+    "sav1": {"name": "BofA Savings", "type": "Banking (savings)"},
+    "cc1": {"name": "Robinhood Credit Card", "type": "Credit"},
+    "inv1": {"name": "Robinhood Brokerage", "type": "Investing"},
+}
+
+
+def test_balance_summary_keeps_only_cash_accounts():
+    records = [
+        {"accountId": "chk1", "initialBalance": 1000.0, "endingBalance": 1500.0},
+        {"accountId": "sav1", "initialBalance": 5000.0, "endingBalance": 4000.0},
+        {"accountId": "cc1", "initialBalance": -200.0, "endingBalance": -350.0},
+        {"accountId": "inv1", "initialBalance": 10.0, "endingBalance": 20.0},
+    ]
+    out = analysis.balance_summary(records, ACCOUNTS)
+    assert [r["account"] for r in out["accounts"]] == ["BofA Savings", "Chase Checking"]
+    assert out["total_start"] == 6000.0
+    assert out["total_end"] == 5500.0
+    assert out["accounts"][1]["change"] == 500.0
+    assert out["unknown_account_ids"] == []
+
+
+def test_balance_summary_reports_unmapped_accounts_rather_than_dropping_them():
+    records = [
+        {"accountId": "chk1", "initialBalance": 1.0, "endingBalance": 2.0},
+        {"accountId": "brand-new", "initialBalance": 99.0, "endingBalance": 99.0},
+    ]
+    out = analysis.balance_summary(records, ACCOUNTS)
+    assert out["unknown_account_ids"] == ["brand-new"]
+    assert len(out["accounts"]) == 1
+
+
+def test_balance_summary_leaves_a_missing_balance_as_unknown():
+    records = [{"accountId": "chk1", "initialBalance": None, "endingBalance": 5.0}]
+    out = analysis.balance_summary(records, ACCOUNTS)
+    assert out["accounts"][0]["change"] is None
+
+
+def _report_with(balances):
+    return {
+        "as_of": "2026-09-20", "window_days": 365,
+        "months_in_window": ["2026-09"], "missing_months": [],
+        "totals": {"needs": 1.0, "wants": 1.0, "savings": 1.0,
+                   "income": 5.0, "total_tracked_outflow": 3.0},
+        "top_needs": [], "top_wants": [], "matrix": {},
+        "trends": {"up": [], "down": []}, "category_breakdowns": {},
+        "excluded_count": 0,
+        "cash_flow": {"income": 5.0, "outflow": 3.0, "net": 2.0},
+        "prior_cash_flow": None, "balances": balances,
+    }
+
+
+def test_render_includes_the_balance_table_and_its_total():
+    out = analysis.render_html(_report_with(analysis.balance_summary(
+        [{"accountId": "chk1", "initialBalance": 1000.0, "endingBalance": 1500.0}],
+        ACCOUNTS)))
+    assert "Checking &amp; savings balances" in out
+    assert "$1,500.00" in out
+    assert "Total" in out
+
+
+def test_render_omits_the_balance_section_when_no_lookup_was_made():
+    out = analysis.render_html(_report_with(None))
+    assert "Checking &amp; savings balances" not in out
+
+
+def test_render_names_unmapped_accounts():
+    out = analysis.render_html(_report_with(analysis.balance_summary(
+        [{"accountId": "chk1", "initialBalance": 1.0, "endingBalance": 2.0},
+         {"accountId": "brand-new", "initialBalance": 9.0, "endingBalance": 9.0}],
+        ACCOUNTS)))
+    assert "brand-new" in out
+    assert "accounts.json" in out

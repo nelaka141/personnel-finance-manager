@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 from .csv_io import csv_text_to_rows
 from .drive_client import DriveAccessError, DriveClient
 from .rules import classify
+from .sync import load_accounts
 
 DEFAULT_WINDOW_DAYS = 365
 # Categories to always render a full-window per-merchant breakdown table for,
@@ -220,7 +221,52 @@ def prior_window_cash_flow(as_of, window_days, drive):
     return flow
 
 
-def run_analysis(as_of=None, window_days=DEFAULT_WINDOW_DAYS, drive=None):
+CASH_ACCOUNT_TYPE_PREFIX = "banking"
+
+
+def balance_summary(records, accounts):
+    """Build the checking/savings balance table from ONE get_balance_history
+    call plus the static accounts.json map.
+
+    `records` are that call's raw output: {accountId, initialBalance,
+    endingBalance}. Account name and type come from `accounts`, which is why
+    this needs no `get_accounts` call -- see the call budget in claude.md.
+
+    An account id that is not in the map is reported under `unknown_account_ids`
+    rather than dropped: it means a newly linked account that accounts.json has
+    not caught up with, and silently omitting it would understate the total.
+    """
+    rows, unknown = [], []
+    for rec in records:
+        account_id = rec.get("accountId")
+        acct = accounts.get(account_id)
+        if acct is None:
+            unknown.append(account_id)
+            continue
+        if not (acct.get("type") or "").lower().startswith(CASH_ACCOUNT_TYPE_PREFIX):
+            continue
+        start, end = rec.get("initialBalance"), rec.get("endingBalance")
+        rows.append({
+            "account": acct.get("name", account_id),
+            "type": acct.get("type", ""),
+            "start": start,
+            "end": end,
+            # None rather than 0.0 when either side is missing: a missing
+            # balance is unknown, and claude.md forbids reporting a figure
+            # for data that did not load.
+            "change": (end - start) if start is not None and end is not None else None,
+        })
+    rows.sort(key=lambda r: r["account"])
+    return {
+        "accounts": rows,
+        "total_start": sum(r["start"] for r in rows if r["start"] is not None),
+        "total_end": sum(r["end"] for r in rows if r["end"] is not None),
+        "unknown_account_ids": unknown,
+    }
+
+
+def run_analysis(as_of=None, window_days=DEFAULT_WINDOW_DAYS, drive=None,
+                 balances=None):
     drive = drive or DriveClient()
     rows, months, missing_months = load_window_rows(as_of, window_days, drive)
     result = classify(rows)
@@ -267,6 +313,7 @@ def run_analysis(as_of=None, window_days=DEFAULT_WINDOW_DAYS, drive=None):
         "prior_cash_flow": prior_window_cash_flow(
             as_of or date.today(), window_days, drive
         ),
+        "balances": balance_summary(balances, load_accounts()) if balances else None,
     }
 
 
@@ -342,10 +389,32 @@ def render_html(report):
         else:
             parts.append("<li>Prior window: no readable data in Drive for that "
                          "period, so no comparison is shown.</li>")
-        parts.append("<li>Account balances are not reported: a balance cannot be "
-                     "derived from a transaction ledger, and fetching one would "
-                     "exceed this routine's one-Truthifi-call-per-run budget.</li>")
         parts.append("</ul>")
+
+    bal = report.get("balances")
+    if bal and bal["accounts"]:
+        parts.append("<h3>Checking &amp; savings balances</h3>")
+        parts.append(_table(
+            bal["accounts"] + [{
+                "account": "Total", "type": "",
+                "start": bal["total_start"], "end": bal["total_end"],
+                "change": bal["total_end"] - bal["total_start"],
+            }],
+            ["account", "type", "start", "end", "change"],
+            ["Account", "Type", "Balance a year ago", "Balance now", "Change"],
+        ))
+        if bal["unknown_account_ids"]:
+            parts.append(
+                "<p><b>Note:</b> " + str(len(bal["unknown_account_ids"]))
+                + " account(s) came back from Truthifi that are not in "
+                  "<code>bot/accounts.json</code>, so they are left out of the "
+                  "table and the total. Add them to that file to include them: "
+                + ", ".join(html.escape(str(a)) for a in bal["unknown_account_ids"])
+                + ".</p>"
+            )
+    elif bal is not None:
+        parts.append("<h3>Checking &amp; savings balances</h3>"
+                     "<p>No cash accounts came back from the balance lookup.</p>")
     if report["missing_months"]:
         parts.append(
             "<p><b>Note:</b> no transaction data was readable in Drive for: "

@@ -124,14 +124,25 @@ what failed and stop, rather than improvising another route.
     `{"last_synced_date": ...}` over it loses it, and a run that cannot find
     the existing `sync_state.json` by name will create a *second* one rather
     than update it (which is how the root folder ended up holding three).
-- **API call budget: exactly one Truthifi call per run.** That one call is the
-  `get_transactions` in step 2 below. Nothing else in this routine may call
-  Truthifi — not `get_accounts`, not `get_balance_history`, not a second page of
-  transactions. Everything else the report needs is derived from the CSVs
-  already archived in Drive. The monthly allowance is small (150 calls); a run
-  that spends three calls instead of one exhausts it before the month is out,
-  which is exactly what happened on 2026-09-20 and left the rest of that month
-  unable to sync at all.
+- **API call budget: at most three Truthifi calls per run**, allocated as:
+  1. `get_transactions` — the sync window (step 2).
+  2. `get_transactions` — one more page, and only if `hasMore` came back true.
+  3. `get_balance_history` — once, for the report's balance section (Phase 2).
+
+  Nothing else may call Truthifi. In particular **never call `get_accounts`**:
+  `bot/accounts.json` already maps every account id to its name, institution,
+  type and last 4, including which are `Banking (checking)` and
+  `Banking (savings)`, so the classification the report needs is already on
+  disk. Everything else — categorization, de-duplication, all trend and total
+  arithmetic — is derived from the CSVs already archived in Drive and costs
+  nothing.
+
+  The monthly allowance is 150 calls. On the twice-weekly schedule that is
+  roughly 26 calls a month, a wide margin. The budget exists because the
+  2026-09-20 run spent its calls without one and exhausted the allowance
+  outright, leaving the rest of September unable to sync at all — so the cap is
+  a ceiling to stay under, not a target to spend up to. A run that needs no
+  second page makes two calls, and that is the normal case.
 - Each run:
   1. Read `last_synced_date` from `sync_state.json`.
   2. Call Truthifi `get_transactions` **once** for **all** accounts with **no
@@ -140,8 +151,12 @@ what failed and stop, rather than improvising another route.
      Drive archive), for the window `[last_synced_date, today]`, sorted by date
      ascending. Do not pass `pageSize`: it is capped by the subscription tier,
      and asking for more than the tier allows fails the whole call rather than
-     returning fewer rows. Do not follow the `cursor` for a second page — step 5
-     says what to do when `hasMore` comes back true.
+     returning fewer rows. If `hasMore` comes back true, follow the `cursor` for
+     **one** more page and no further — step 5 says what to do if it is still
+     true after that. Two pages covers a normal multi-day window comfortably;
+     it also covers the catch-up after an outage, which is the case that
+     actually needs it (the 2026-09-20 quota exhaustion left roughly twelve
+     days to resync, more than a single page holds).
   3. Group the newly-fetched records by calendar month (a sync window usually
      lands in one month, occasionally two if it spans a month boundary).
   4. For each affected month: download the existing `transactions_YYYY-MM.csv`
@@ -157,11 +172,11 @@ what failed and stop, rather than improvising another route.
        returned data for. Never record a day the call did not really cover:
        on 2026-09-20 the range came back capped at 2026-09-19, so 09-19 is the
        honest watermark and 09-20 would have silently skipped a day.
-     - If `hasMore` was true, the single page covered the earliest dates only,
-       and its newest day is likely truncated part-way through. Set
-       `last_synced_date` to the day *before* the newest date in the returned
-       page, and report that the window was not fully consumed. Tomorrow's one
-       call resumes from there and catches up. This trades a day of latency for
+     - If `hasMore` was *still* true after the second page, those pages covered
+       the earliest dates only, and the newest day fetched is likely truncated
+       part-way through. Set `last_synced_date` to the day *before* the newest
+       date fetched, and report that the window was not fully consumed. The next
+       run resumes from there and catches up. This trades a little latency for
        staying inside the call budget, and it never silently drops a row.
   6. If the Truthifi call fails outright — daily rate limit, monthly quota
      exhausted, or any other error — do not retry it, and do not advance
@@ -247,12 +262,28 @@ Provide a clean summary showing:
   actually readable: the archive begins 2025-01, so a prior-year comparison run
   before 2027-01 covers only part of its window and must say so rather than
   presenting a partial figure as a full-year one.
-- **Account balances are deliberately not reported.** A balance cannot be
-  derived from a transaction ledger, and fetching one would cost a second and
-  third Truthifi call per run (`get_accounts` + `get_balance_history`), which
-  the Phase 1 call budget does not allow. If a balance is ever wanted, it is a
-  deliberate decision to widen that budget — not something a run adds on its
-  own initiative.
+- Balance remaining in each checking/savings account, with the change vs. one
+  year ago, and a total across them. This is the one figure in the report that
+  cannot come from Drive — a balance is not derivable from a transaction ledger
+  — so it costs the single `get_balance_history` call in the budget above.
+  - Make that call **once**, with `accountIds` left null and `dateRange` set to
+    the comparison window (`as_of - window_days` .. `as_of`). The response's
+    `initialBalance` is then the balance at the start of the window and
+    `endingBalance` the balance now, which is both halves of the comparison from
+    one call.
+  - Take each account's name and type from `bot/accounts.json`, never from
+    `get_accounts`. Report only the `Banking (checking)` and
+    `Banking (savings)` accounts, and name any returned account id that is
+    **not** in that map rather than silently dropping it — an unrecognized id
+    means a newly linked account that `accounts.json` needs adding to.
+  - **Unverified, worth checking on the first run after 2026-10-01:**
+    `get_transactions` silently caps any range longer than 90 days, and it is
+    not established whether `get_balance_history` does the same. If it does,
+    `initialBalance` would be the balance 90 days ago while the report labels it
+    as a year ago. Sanity-check that figure against the net cash flow below the
+    first time this runs; if it looks like a 90-day-old balance, split the
+    comparison into two narrow-window calls (the budget has room) rather than
+    reporting a number that is quietly wrong.
 
 ## Email Delivery (after the analysis)
 After producing the summary, draft a detailed email using the Gmail MCP connector:
@@ -264,7 +295,8 @@ After producing the summary, draft a detailed email using the Gmail MCP connecto
    Needs/Wants/Savings breakdown with per-category detail and notable merchants, the
    two top-15 HTML tables, the month × category trend matrix and the trending
    up/down table described above, net cash flow for the window with its
-   prior-year comparison (not account balances — see Output Format), and any
+   prior-year comparison, the checking/savings balance table with its
+   year-over-year change, and any
    flags (over-target buckets, zero savings, missing income, untracked cash
    withdrawals, or a Phase 1 sync gap from a rate-limit or quota stop, naming
    the last day actually synced). Note anything de-duplicated or excluded.

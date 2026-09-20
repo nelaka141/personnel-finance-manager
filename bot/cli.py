@@ -152,7 +152,12 @@ def cmd_sync(args):
 def cmd_analyze(args):
     as_of = datetime.strptime(args.as_of, "%Y-%m-%d").date() if args.as_of else date.today()
     store = LocalArchive(args.from_dir) if args.from_dir else DriveClient()
-    report = run_analysis(as_of=as_of, window_days=args.window_days, drive=store)
+    balances = None
+    if args.balances_json:
+        with open(args.balances_json) as f:
+            balances = json.load(f)
+    report = run_analysis(as_of=as_of, window_days=args.window_days, drive=store,
+                          balances=balances)
     if args.json_out:
         with open(args.json_out, "w") as f:
             json.dump(report, f, indent=2, default=str)
@@ -192,6 +197,7 @@ def main(argv=None):
     p.add_argument("--as-of", help="YYYY-MM-DD, defaults to today")
     p.add_argument("--from-dir", help="Read the monthly CSVs from this local directory instead of Drive")
     p.add_argument("--window-days", type=int, default=365)
+    p.add_argument("--balances-json", help="Path to a JSON file: the raw output of one Truthifi get_balance_history call over the comparison window. Omit to skip the balance section.")
     p.add_argument("--json-out", help="Write the raw report as JSON to this path")
     p.add_argument("--html-out", help="Write the rendered HTML report to this path (default: stdout)")
     p.set_defaults(func=cmd_analyze)
