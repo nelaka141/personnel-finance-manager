@@ -225,7 +225,19 @@ def _fmt_money(x):
     return f"${x:,.2f}"
 
 
-def _table(rows, columns, headers):
+def _fmt_pct(x):
+    return f"{x:,.1f}%"
+
+
+def _table(rows, columns, headers, percent_columns=()):
+    """Render rows as an HTML table.
+
+    Floats render as currency, which is right for every column except the
+    percentage ones -- a "% change" of 359.12 rendered as "$359.12" reads as a
+    dollar figure and badly misleads anyone skimming the trend tables. Name
+    those columns in `percent_columns`.
+    """
+    percent_columns = set(percent_columns)
     out = ["<table border='1' cellpadding='4' cellspacing='0'>", "<tr>"]
     out += [f"<th>{html.escape(h)}</th>" for h in headers]
     out.append("</tr>")
@@ -234,7 +246,7 @@ def _table(rows, columns, headers):
         for c in columns:
             val = r.get(c, "")
             if isinstance(val, float):
-                val = _fmt_money(val)
+                val = _fmt_pct(val) if c in percent_columns else _fmt_money(val)
             out.append(f"<td>{html.escape(str(val))}</td>")
         out.append("</tr>")
     out.append("</table>")
@@ -298,6 +310,7 @@ def render_html(report):
             ["category", "latest_value", "dollar_change", "pct_change_vs_prior", "pct_change_vs_trailing"],
             ["Category", "Latest Month $", "$ Change vs Prior Month",
              "% Change vs Prior Month", "% Change vs Trailing 3-mo Avg"],
+            percent_columns=("pct_change_vs_prior", "pct_change_vs_trailing"),
         ))
 
     return "\n".join(parts)
