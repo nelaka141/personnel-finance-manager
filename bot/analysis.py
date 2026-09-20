@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 from .csv_io import csv_text_to_rows
-from .drive_client import DriveClient
+from .drive_client import DriveAccessError, DriveClient
 from .rules import classify
 
 DEFAULT_WINDOW_DAYS = 365
@@ -56,6 +56,20 @@ def load_window_rows(as_of=None, window_days=DEFAULT_WINDOW_DAYS, drive=None):
         for r in csv_text_to_rows(text):
             if r.get("Date", "") <= as_of.isoformat():
                 rows.append(r)
+
+    if len(missing) == len(months):
+        # Every month came back empty. Under the drive.file scope that is
+        # far more likely to mean "this app cannot see the archive" than
+        # "a year with no transactions", and claude.md forbids reporting
+        # figures for data that did not actually load -- so refuse rather
+        # than render a $0 report.
+        raise DriveAccessError(
+            f"None of the {len(months)} monthly CSVs in the window "
+            f"({months[0]}..{months[-1]}) could be read from Drive. Either "
+            "the archive is not visible to this app under the drive.file "
+            "scope, or it is empty. Run `python -m bot.cli doctor` to tell "
+            "the two apart."
+        )
     return rows, months, missing
 
 
@@ -242,8 +256,11 @@ def render_html(report):
     ]
     if report["missing_months"]:
         parts.append(
-            "<p><b>Note:</b> no data found in Drive for: "
-            + ", ".join(report["missing_months"]) + "</p>"
+            "<p><b>Note:</b> no transaction data was readable in Drive for: "
+            + ", ".join(report["missing_months"])
+            + ". Those months are excluded from every total and table below "
+            "(not treated as zero spend)."
+            + "</p>"
         )
 
     parts.append("<h3>Top 15 — Needs</h3>")

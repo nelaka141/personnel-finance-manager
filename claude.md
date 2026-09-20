@@ -9,19 +9,43 @@ rate limit at all.
 
 ## Phase 1 — Daily Sync (Truthifi → Google Drive)
 
-- Drive root folder: `personnel-finances` (look it up by name/mimeType if the id
-  isn't already known). Each calendar month has its own subfolder `YYYY-MM`
-  containing one file, `transactions_YYYY-MM.csv`.
+- Drive root folder: `personnel-finances`. Resolve it by **id first** — from
+  `GOOGLE_DRIVE_ROOT_FOLDER_ID`, then from the `file_ids` map cached in
+  `sync_state.json` — and only fall back to a name/mimeType lookup. Each
+  calendar month has its own subfolder `YYYY-MM` containing one file,
+  `transactions_YYYY-MM.csv`.
 - All Drive reads/writes in this routine (both phases) go through
   `google-api-python-client`, authenticated from the OAuth token JSON in env var
   `GOOGLE_DRIVE_TOKEN_JSON` (keys: token, refresh_token, token_uri, client_id,
   client_secret, scopes) — not the Drive MCP connector tool. Use a venv if the
   system Python's native `cryptography`/`_cffi_backend` install is broken.
+- **The OAuth grant is `drive.file`, not full drive access.** Two consequences
+  the routine has to respect:
+  - The refresh request must never ask for a broader scope than was granted, or
+    Google rejects the whole refresh with `invalid_scope` and no Drive call runs
+    at all (this is what killed the 2026-09-19 run). `bot/drive_client.py` drops
+    any stale full-drive scope found in the token JSON.
+  - This app can only see files it created itself or that were explicitly opened
+    with it. So a file that cannot be read is *not* evidence of a month with no
+    spending: an unreadable month is reported, never counted as zero, and a
+    window where nothing at all is readable aborts instead of producing a $0
+    report. Run `python -m bot.cli doctor` to tell "hidden by the scope" apart
+    from "genuinely empty"; if the archive is hidden, say so and stop rather
+    than re-deriving figures, per the no-fabrication rule below.
 - Sync state file: `personnel-finances/sync_state.json`, holding
   `{"last_synced_date": "YYYY-MM-DD"}` — the last calendar date already pulled from
   Truthifi and written to Drive.
   - If this file doesn't exist yet, bootstrap it from the newest date already
-    present across the existing monthly CSVs in Drive.
+    present across the existing monthly CSVs in Drive
+    (`bootstrap-sync-state`), or from an explicit
+    `--from-date YYYY-MM-DD` when those CSVs are not readable under the
+    `drive.file` scope and the archive has to be rebuilt forward.
+  - It also carries a `file_ids` map (Drive ids for the root folder, the month
+    folders and the monthly CSVs) so later runs address files by id instead of
+    by name. Keep that map when writing the file — writing a fresh
+    `{"last_synced_date": ...}` over it loses it, and a run that cannot find
+    the existing `sync_state.json` by name will create a *second* one rather
+    than update it (which is how the root folder ended up holding three).
 - Each run:
   1. Read `last_synced_date` from `sync_state.json`.
   2. Call Truthifi `get_transactions` for **all** accounts with **no category or
