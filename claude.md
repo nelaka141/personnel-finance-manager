@@ -276,6 +276,14 @@ Provide a clean summary showing:
     `Banking (savings)` accounts, and name any returned account id that is
     **not** in that map rather than silently dropping it — an unrecognized id
     means a newly linked account that `accounts.json` needs adding to.
+  - **If that call fails** — quota exhausted, rate limited, or any other error —
+    omit the balance section, say plainly why it is missing, and carry on with
+    the rest of the report. `analyze --balances-json` is optional precisely so a
+    failed lookup costs only that one section: run `analyze` without the flag.
+    Between 2026-09-20 and the 1 October quota reset this is the expected path,
+    not an error to stop on. Never carry a balance forward from an earlier run
+    and never estimate one — a stale balance presented as current is worse than
+    no balance at all.
   - **Unverified, worth checking on the first run after 2026-10-01:**
     `get_transactions` silently caps any range longer than 90 days, and it is
     not established whether `get_balance_history` does the same. If it does,
